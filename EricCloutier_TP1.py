@@ -1,7 +1,7 @@
 import sys  # Load les modules interpréteur Python / ligne de commande
 import json # Load le module JSON
 import os   # Load le module Operating System interactions avec ton ordinateur / Windows (fichiers, dossiers, chemins d'accès)
-import re   # Module d'expressions régulières pour extraire les nombres du texte, voir ligne 4, 22, 140, 144
+import re   # Module d'expressions régulières pour extraire les nombres du texte
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -20,8 +20,7 @@ from PySide6.QtCore import Qt # Ce qui va gérer le tri numérique (Qt.DisplayRo
 
 
 # ------------------------------------------------------------------------------------------
-# Cette partie a été ajouté à la fin après avoir réalisé que le tri de taille ne marchait pas
-# voir ligne 4, 22, 140, 144
+# Cette partie a été ajoutée à la fin après avoir réalisé que le tri de taille ne marchait pas
 # ------------------------------------------------------------------------------------------
 # Classe personnalisée pour gérer le tri numérique sur du texte (ex: "18.5 MB", "120,5 $")
 class ItemTriable(QTableWidgetItem):
@@ -31,7 +30,8 @@ class ItemTriable(QTableWidgetItem):
 
         # Si les deux éléments ont une valeur numérique personnalisée
         if val1 is not None and val2 is not None:
-            return val1 < val2
+            if val1 != val2:
+                return val1 < val2
 
         # Secours : comparaison texte Python pure (évite la récursion avec super())
         return self.text() < other.text()
@@ -120,41 +120,60 @@ class FenetrePrincipale(QMainWindow):
         # Permet de réorganiser les colonnes de gauche à droite
         self.tableau.horizontalHeader().setSectionsMovable(True)
 
-        # Permet de trier les colonnes (A-Z / Z-A) en cliquant sur l'en-tête
-        self.tableau.setSortingEnabled(True)
-
-        # Pernet d'ajuster manuellement les colonnes sur la largeur de la fenêtre
+        # Permet d'ajuster manuellement les colonnes sur la largeur de la fenêtre
         self.tableau.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
 
         # Étire automatiquement la dernière colonne pour éviter un espace vide à droite
         self.tableau.horizontalHeader().setStretchLastSection(True)
 
+        # Désactive le tri le temps de remplir le tableau pour éviter les bugs sur la largeur des colonnes
+        self.tableau.setSortingEnabled(False)
+        
         # Remplissage dynamique avec for
         for rows, objet in enumerate(data_json):
             for colonnes, valeur in enumerate(objet.values()):
                 item = ItemTriable()
+                item.setText(str(valeur))  # Définit le texte de base pour toutes les cellules
 
-                # Si c'est un nombre (int ou float), sera traîté comme un vrai nombre
+
+                # ------------------------------------------------------------------------------------------
+                # Cette partie a été ajoutée à la fin après avoir réalisé que le tri de taille ne marchait pas
+                # ------------------------------------------------------------------------------------------
+                # Si c'est un nombre (int ou float), sera traité comme un vrai nombre
                 if isinstance(valeur, (int, float)):
                     item.setData(Qt.DisplayRole, valeur)
-                    item.setData(Qt.UserRole, float(valeur))    # Sauvegarde pour le tri, voir ligne 4, 22, 140, 144
+                    item.setData(Qt.UserRole, float(valeur))    # Sauvegarde pour le tri
+                
+                # Validation du texte contenant unité (ex: "18.5" de "18.5 MB") seulement si ce n'est pas une date
                 else:
-                    item.setText(str(valeur)) # Conversion en str() pour éviter les crashs
+                    texte_clean = str(valeur).replace(',', '.').strip()
 
-            # ------------------------------------------------------------------------------------------
-            # Cette partie a été ajouté à la fin après avoir réalisé que le tri de taille ne marchait pas
-            # voir ligne 4, 22, 140, 144
-            # ------------------------------------------------------------------------------------------
-                # Extrait le chiffre (ex: "18.5" de "18.5 MB")
-                texte_clean = str(valeur).replace(',', '.').strip()
-                if not re.match(r"^\d{4}-\d{2}-\d{2}", texte_clean):
-                    match = re.search(r"[-+]?\d*\.?\d+", texte_clean)
-                    if match and match.group():
-                        try:
-                            item.setData(Qt.UserRole, float(match.group()))  # Enregistre 18.5 dans Qt.UserRole
-                        except ValueError:
-                            pass
-            # ------------------------------------------------------------------------------------------
+                    # Gestion spécifique des tailles de fichiers (ex: "500 KB", "2.5 MB", "1.2 GB")
+                    match_taille = re.search(r"^([-+]?\d*\.?\d+)\s*(B|KB|MB|GB|TB)$", texte_clean, re.IGNORECASE)
+
+                    if match_taille:
+                        valeur_num = float(match_taille.group(1))
+                        unite = match_taille.group(2).upper()
+                        multiplicateurs = {
+                            "B": 1,
+                            "KB": 1024,
+                            "MB": 1024**2,
+                            "GB": 1024**3,
+                            "TB": 1024**4
+                        }
+                        # Convertit en octets temporairement pour un tri
+                        octets = valeur_num * multiplicateurs.get(unite, 1)
+                        item.setData(Qt.UserRole, octets)
+
+                    # Sinon, si ce n'est PAS une date, extraction numérique standard (ex: "120,50 $")
+                    elif not re.match(r"^\d{4}-\d{2}-\d{2}", texte_clean):
+                        match = re.search(r"[-+]?\d*\.?\d+", texte_clean)
+                        if match and match.group():
+                            try:
+                                item.setData(Qt.UserRole, float(match.group()))  # Enregistre la valeur numérique dans Qt.UserRole
+                            except ValueError:
+                                pass
+                # ------------------------------------------------------------------------------------------
 
                 self.tableau.setItem(rows, colonnes, item)
 
@@ -162,7 +181,14 @@ class FenetrePrincipale(QMainWindow):
         # Ajuste en 1er chaque colonne au texte  le plus long
         self.tableau.resizeColumnsToContents()
 
-        # Calcule la largeur totale requise par toutes les colonnes + en-tête de ligne
+        # Ajoute une marge à chaque colonne pour la flèche de tri et les bordures
+        for col in range(self.tableau.columnCount()):
+            self.tableau.setColumnWidth(col, self.tableau.columnWidth(col) + 25)
+
+        # Réactive le tri après toute avoir bien placé des colonnes (A-Z / Z-A) en cliquant sur l'en-tête
+        self.tableau.setSortingEnabled(True)
+        
+        # Calcule la largeur optimale de la fenêtre
         largeur_totale = self.tableau.verticalHeader().width() + 50
         for col in range(self.tableau.columnCount()):
             largeur_totale += self.tableau.columnWidth(col)
@@ -171,13 +197,13 @@ class FenetrePrincipale(QMainWindow):
         largeur_optimale = max(700, min(largeur_totale, 1400))
         self.resize(largeur_optimale, 600)
 
-        # Agencement des layouts
-        # Agencement horizontal
+        # Organisation des layouts
+        # Agencement Horizontal
         ligne_entete = QHBoxLayout()
         ligne_entete.addWidget(self.texte_info)
         ligne_entete.addWidget(self.champ_recherche)
 
-        # Agencement vertical
+        # Agencement Vertical
         layout_principal = QVBoxLayout()
         layout_principal.addLayout(ligne_entete)    # entête en haut
         layout_principal.addWidget(self.tableau)    # Tableau en bas
@@ -186,7 +212,7 @@ class FenetrePrincipale(QMainWindow):
         cadre_principal.setObjectName("cadrePrincipal") # Nom du cadre pour le style QSS (créer un id)
         cadre_principal.setLayout(layout_principal)
 
-        # Applique le style visuel
+        # Applique le style visuel QSS
         self.appliquer_style()
 
         # Assigne le cadre_principal comme widget central de la fenêtre
@@ -201,7 +227,7 @@ class FenetrePrincipale(QMainWindow):
             #cadrePrincipal, QMainWindow {
                 background-color: #e6f4ea;
             }
-            /* Texte en haut à gauche */
+            /* Texte infos métadonnées en haut à gauche */
             QLabel {
                 font-family: 'Roboto', sans-serif;
                 font-size: 16px;
@@ -221,7 +247,7 @@ class FenetrePrincipale(QMainWindow):
             QLineEdit:focus {
                 border: 2px solid #2563eb;
             }
-            /* Contour et grille du tableau */
+            /* Grille et Tableau */
             QTableWidget {
                 font-family: 'Roboto', sans-serif;
                 background-color: #f0fdf4;
